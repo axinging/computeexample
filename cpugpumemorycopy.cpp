@@ -4,8 +4,7 @@ Install boost compute:
     https://www.boost.org/doc/libs/1_65_1/libs/compute/doc/html/boost_compute/getting_started.html
 
 Build:
-    g++  cpugpumemorycopy.cpp  -o cpugpu  -I ../../boost/boost_1_71_0/boost
--lOpenCL
+    g++  cpugpumemorycopy.cpp  -o cpugpu  -I ../../boost/boost_1_71_0/boost -lOpenCL
 
 Data on i7-7700K and GTX1060:
 CPU2CPU copy: 0.00292788s
@@ -27,7 +26,7 @@ using namespace std::chrono;
 using namespace std;
 
 int main() {
-  int sz = 10 * 1024 * 1024;
+  int sz = 1 * 1024 * 1024;
   std::vector<float> v1(sz, 2.3f), v2(sz);
   compute::vector<float> v3(sz), v4(sz);
   {
