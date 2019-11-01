@@ -22,15 +22,19 @@ g++ matrix_transpose.cpp -o matrix_transpose -I /home/xxu42/boost/boost_1_71_0/b
 #include <boost/compute/container/vector.hpp>
 #include <boost/compute/type_traits/type_name.hpp>
 #include <boost/compute/utility/source.hpp>
+#include <chrono>
+
+using namespace std::chrono;
+using namespace std;
 
 namespace compute = boost::compute;
 namespace po = boost::program_options;
 
 using compute::uint_;
-
 const uint_ TILE_DIM = 32;
 const uint_ BLOCK_ROWS = 8;
-
+const float NS2MS = 1e-6;
+const float S2MS = 1000.0;
 // generate a copy kernel program
 compute::kernel make_copy_kernel(const compute::context& context)
 {
@@ -220,6 +224,44 @@ void generate_matrix(std::vector<float>& in, std::vector<float>& out, uint_ rows
 #define uint64_t unsigned __int64
 #endif
 
+void CPUGPUcopy(const uint_ size_x, const uint_ size_y) {
+  int sz = size_x * size_y;
+  std::cout << "Matrix Size: " << size_x << "x" << size_y << std::endl;
+
+  std::vector<float> v1(sz, 2.3f), v2(sz);
+  compute::vector<float> v3(sz), v4(sz);
+  {
+    auto s = system_clock::now();
+    std::copy(v1.begin(), v1.end(), v2.begin());
+    auto e = system_clock::now();
+    std::chrono::duration<double> elapsed_seconds = e - s;
+    std::cout << "CPU2CPU copy: " << elapsed_seconds.count() * S2MS << " ms\n";
+  }
+  {
+    auto s = system_clock::now();
+    compute::copy(v1.begin(), v1.end(), v3.begin());
+    auto e = system_clock::now();
+    std::chrono::duration<double> elapsed_seconds = e - s;
+    std::cout << "CPU2GPU copy: " << elapsed_seconds.count() * S2MS << " ms\n";
+  }
+  {
+    auto s = system_clock::now();
+    compute::copy(v3.begin(), v3.end(), v4.begin());
+    auto e = system_clock::now();
+    std::chrono::duration<double> elapsed_seconds = e - s;
+    std::cout << "GPU2GPU copy: " << elapsed_seconds.count() * S2MS << " ms\n";
+  }
+  {
+    auto s = system_clock::now();
+    compute::copy(v3.begin(), v3.end(), v1.begin());
+    auto e = system_clock::now();
+    std::chrono::duration<double> elapsed_seconds = e - s;
+    std::cout << "GPU2CPU copy: " << elapsed_seconds.count() * S2MS << " ms\n";
+  }
+
+}
+
+
 int main(int argc, char *argv[])
 {
     // setup command line arguments
@@ -244,7 +286,9 @@ int main(int argc, char *argv[])
     // get number rows and columns for the matrix
     const uint_ rows = vm["rows"].as<uint_>();
     const uint_ cols = vm["cols"].as<uint_>();
-
+    std::cout<< "***Copy test***"<<endl;
+    CPUGPUcopy(rows, cols);
+    std::cout<< "***Compute test***"<<endl;
     // get the default device
     compute::device device = compute::system::default_device();
 
@@ -287,7 +331,6 @@ int main(int argc, char *argv[])
     compute::copy(h_input.begin(), h_input.end(), d_input.begin(), queue);
 
     // simple copy kernel
-    std::cout << "Testing copy_kernel:" << std::endl;
     compute::kernel kernel = make_copy_kernel(context);
     kernel.set_arg(0, d_input);
     kernel.set_arg(1, d_output);
@@ -297,15 +340,14 @@ int main(int argc, char *argv[])
     queue.finish();
     uint64_t elapsed = start.duration<boost::chrono::nanoseconds>().count();
 
-    std::cout << "  Elapsed: " << elapsed << " ns" << std::endl;
-    std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
+    std::cout << "copy_kernel: " << elapsed*NS2MS << " ms" << std::endl;
+    //std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
     compute::copy(d_output.begin(), d_output.end(), h_output.begin(), queue);
 
     check_transposition(h_input, rows*cols, h_output);
     std::cout << std::endl;
 
     // naive_transpose kernel
-    std::cout << "Testing naive_transpose:" << std::endl;
     kernel = make_naive_transpose_kernel(context);
     kernel.set_arg(0, d_input);
     kernel.set_arg(1, d_output);
@@ -313,15 +355,14 @@ int main(int argc, char *argv[])
     start = queue.enqueue_nd_range_kernel(kernel, 2, 0, global_work_size, local_work_size);
     queue.finish();
     elapsed = start.duration<boost::chrono::nanoseconds>().count();
-    std::cout << "  Elapsed: " << elapsed << " ns" << std::endl;
-    std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
+    std::cout  << "naive_transpose: " << elapsed*NS2MS << " ms" << std::endl;
+    //std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
     compute::copy(d_output.begin(), d_output.end(), h_output.begin(), queue);
 
     check_transposition(expectedResult, rows*cols, h_output);
     std::cout << std::endl;
 
     // coalesced_transpose kernel
-    std::cout << "Testing coalesced_transpose:" << std::endl;
     kernel = make_coalesced_transpose_kernel(context);
     kernel.set_arg(0, d_input);
     kernel.set_arg(1, d_output);
@@ -329,8 +370,8 @@ int main(int argc, char *argv[])
     start = queue.enqueue_nd_range_kernel(kernel, 2, 0, global_work_size, local_work_size);
     queue.finish();
     elapsed = start.duration<boost::chrono::nanoseconds>().count();
-    std::cout << "  Elapsed: " << elapsed << " ns" << std::endl;
-    std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
+    std::cout  << "coalesced_transpose: " << elapsed*NS2MS << " ms" << std::endl;
+    //std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
 
     compute::copy(d_output.begin(), d_output.end(), h_output.begin(), queue);
 
@@ -338,8 +379,6 @@ int main(int argc, char *argv[])
     std::cout << std::endl;
 
     // coalesced_no_bank_conflicts kernel
-    std::cout << "Testing coalesced_no_bank_conflicts:" << std::endl;
-
     kernel = make_coalesced_no_bank_conflicts_kernel(context);
     kernel.set_arg(0, d_input);
     kernel.set_arg(1, d_output);
@@ -347,8 +386,8 @@ int main(int argc, char *argv[])
     start = queue.enqueue_nd_range_kernel(kernel, 2, 0, global_work_size, local_work_size);
     queue.finish();
     elapsed = start.duration<boost::chrono::nanoseconds>().count();
-    std::cout << "  Elapsed: " << elapsed << " ns" << std::endl;
-    std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
+    std::cout << "coalesced_no_bank_conflicts: "  << elapsed*NS2MS << " ms" << std::endl;
+    //std::cout << "  BandWidth: " << 2*rows*cols*sizeof(float) / elapsed << " GB/s" << std::endl;
 
     compute::copy(d_output.begin(), d_output.end(), h_output.begin(), queue);
 
