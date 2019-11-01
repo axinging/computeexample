@@ -25,8 +25,20 @@ namespace compute = boost::compute;
 using namespace std::chrono;
 using namespace std;
 
+void envInformation() {
+
+    /// // get the default compute device
+    compute::device device = boost::compute::system::default_device();
+    ///
+    /// // print the name of the device
+    std::cout << "default device: " << device.name() << std::endl;
+    std::cout << "device count: " << boost::compute::system::device_count << std::endl;
+}
+
+
 int main() {
-  int sz = 1 * 1024 * 1024;
+  int sz = 1 * 4024 * 4024;
+  envInformation();
   std::vector<float> v1(sz, 2.3f), v2(sz);
   compute::vector<float> v3(sz), v4(sz);
   {

@@ -75,7 +75,7 @@ __global__ void transposeNaiveRectangle(float* odata, const float* idata) {
   int height = gridDim.y * TILE_DIM;
 
   if ((x < nx) && (y < ny)) {
-    odata[y + (x)*height] = idata[(x) + width * y];
+    odata[(x)*height + y] = idata[width * y + (x)];
   }
 }
 
@@ -258,6 +258,7 @@ int main(int argc, char** argv) {
     checkCuda(cudaEventSynchronize(stopEvent));
     checkCuda(cudaEventElapsedTime(&ms, startEvent, stopEvent));
     checkCuda(cudaMemcpy(h_tdata, d_tdata, mem_size, cudaMemcpyDeviceToHost));
+    printf(" ms=%f\n", ms/NUM_REPS);
     postprocess(gold, h_tdata, nx * ny, ms);
   }
 
@@ -285,6 +286,7 @@ int main(int argc, char** argv) {
     checkCuda(cudaEventSynchronize(stopEvent));
     checkCuda(cudaEventElapsedTime(&ms, startEvent, stopEvent));
     checkCuda(cudaMemcpy(h_tdata, d_tdata, mem_size, cudaMemcpyDeviceToHost));
+    printf(" ms=%f\n", ms/NUM_REPS);
     postprocess(gold, h_tdata, nx * ny, ms);
   }
 
@@ -313,6 +315,7 @@ int main(int argc, char** argv) {
     checkCuda(cudaEventSynchronize(stopEvent));
     checkCuda(cudaEventElapsedTime(&ms, startEvent, stopEvent));
     checkCuda(cudaMemcpy(h_tdata, d_tdata, mem_size, cudaMemcpyDeviceToHost));
+    printf(" ms=%f\n", ms/NUM_REPS);
     postprocess(gold, h_tdata, nx * ny, ms);
   }
 
