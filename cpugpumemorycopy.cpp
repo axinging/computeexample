@@ -6,11 +6,18 @@ Install boost compute:
 Build:
     g++  cpugpumemorycopy.cpp  -o cpugpu  -I ../../boost/boost_1_71_0/boost -lOpenCL
 
-Data on i7-7700K and GTX1060:
-CPU2CPU copy: 0.00292788s
-CPU2GPU copy: 0.00430584s
-GPU2GPU copy: 0.000136554s
-GPU2CPU copy: 0.00467165s
+Data on i7-7700K and GTX1060
+4096X4096:
+CPU2CPU copy: 0.00467676s
+CPU2GPU copy: 0.00698211s
+GPU2GPU copy: 0.000133137s
+GPU2CPU copy: 0.00740875s
+
+1024X1024:
+CPU2CPU copy: 0.000394094s
+CPU2GPU copy: 0.000688026s
+GPU2GPU copy: 9.2974e-05s
+GPU2CPU copy: 0.000515176s
 
 Code is from:
     https://stackoverflow.com/questions/47648900/memory-copy-speed-comparison-cpu-gpu
@@ -37,7 +44,7 @@ void envInformation() {
 
 
 int main() {
-  int sz = 1 * 4024 * 4024;
+  int sz = 1 * 1024 * 1024;
   envInformation();
   std::vector<float> v1(sz, 2.3f), v2(sz);
   compute::vector<float> v3(sz), v4(sz);

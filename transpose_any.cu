@@ -1,10 +1,10 @@
 /*
 Below code is based on
 https://github.com/NVIDIA-developer-blog/code-samples/tree/master/series/cuda-cpp/transpose.
-nvcc transpose_rectangle.cu  -o transpose_rectangle
+nvcc transpose_any.cu  -o transpose_any
 */
-
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #define DEBUG
 // Convenience function for checking CUDA runtime API results
@@ -20,50 +20,40 @@ inline cudaError_t checkCuda(cudaError_t result) {
   return result;
 }
 
-const int nx = 1024;
-const int ny = 1024;
-const int TILE_DIM = 32;
-const int BLOCK_ROWS = 8;
+const int nx = 2;
+const int ny = 2;
+const int TILE_DIM = 16;
+const int BLOCK_ROWS = TILE_DIM;  // 8;
 const int NUM_REPS = 100;
 
 // Check errors and print GB/s
 void postprocess(const float* ref, const float* res, int n, float ms) {
   bool passed = true;
-  for (int i = 0; i < 256; i++) {
+  printf("\nref   res\n");
+#if 1
+  for (int i = 0; i < n; i++) {
     if (res[i] != ref[i]) {
-      printf("%d %f %f\n", i, ref[i], res[i]);
+      printf(" Failed: %d %f %f\n", i, ref[i], res[i]);
       // printf("%25s\n", "*** FAILED ***");
       passed = false;
+      // break;
+    } else {
+      printf(" Passed: %d %f %f\n", i, ref[i], res[i]);
+    }
+  }
+#endif
+#if 0
+  for (int i = 0; i < n; i++) {
+    if (res[i] != ref[i]) {
+      passed = false;
+      printf("%25s\n", "*** FAILED ***");
       break;
     }
   }
+#endif
+
   if (passed)
     printf("%20.2f\n", 2 * n * sizeof(float) * 1e-6 * NUM_REPS / ms);
-}
-
-// Original coalesced transpose
-// Uses shared memory to achieve coalesing in both reads and writes
-// Tile width == #banks causes shared memory bank conflicts.
-__global__ void transposeCoalescedRectangle_Orig(float* odata,
-                                                 const float* idata) {
-  __shared__ float tile[TILE_DIM][TILE_DIM];
-
-  int x = blockIdx.x * TILE_DIM + threadIdx.x;
-  int y = blockIdx.y * TILE_DIM + threadIdx.y;
-  int width = gridDim.x * TILE_DIM;
-  int height = gridDim.y * TILE_DIM;
-
-  if ((x < nx) && (y < ny)) {
-    tile[threadIdx.y][threadIdx.x] = idata[y * width + x];
-  }
-  __syncthreads();
-
-  x = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
-  y = blockIdx.x * TILE_DIM + threadIdx.y;
-
-  if ((x < ny) && (y < nx)) {
-    odata[y * height + x] = tile[threadIdx.x][threadIdx.y];
-  }
 }
 
 // Naive transpose
@@ -72,13 +62,17 @@ __global__ void transposeCoalescedRectangle_Orig(float* odata,
 __global__ void transposeNaiveRectangle(float* odata, const float* idata) {
   int x = blockIdx.x * TILE_DIM + threadIdx.x;
   int y = blockIdx.y * TILE_DIM + threadIdx.y;
-  int width = gridDim.x * TILE_DIM;
-  int height = gridDim.y * TILE_DIM;
-
+  int width = nx;   // gridDim.x * TILE_DIM;
+  int height = ny;  // gridDim.y * TILE_DIM;
   if ((x < nx) && (y < ny)) {
-    odata[(x)*height + y] = idata[width * y + (x)];
+    odata[y + (x)*height] = idata[(x) + width * y];
   }
 }
+
+int sizeX = nx / TILE_DIM;
+int sizeY = ny / TILE_DIM;
+int remainderX = nx % TILE_DIM;
+int remainderY = ny % TILE_DIM;
 
 // Shared
 __global__ void transposeCoalescedRectangle(float* odata, const float* idata) {
@@ -86,8 +80,8 @@ __global__ void transposeCoalescedRectangle(float* odata, const float* idata) {
 
   int x = blockIdx.x * TILE_DIM + threadIdx.x;
   int y = blockIdx.y * TILE_DIM + threadIdx.y;
-  int width = gridDim.x * TILE_DIM;
-  int height = gridDim.y * TILE_DIM;
+  int width = nx;   // gridDim.x * TILE_DIM;
+  int height = ny;  // gridDim.y * TILE_DIM;
 
   for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
     if ((x < nx) && ((y + j) < ny)) {
@@ -112,8 +106,8 @@ __global__ void transposeNoBankConflictsRectangle(float* odata,
 
   int x = blockIdx.x * TILE_DIM + threadIdx.x;
   int y = blockIdx.y * TILE_DIM + threadIdx.y;
-  int width = gridDim.x * TILE_DIM;
-  int height = gridDim.y * TILE_DIM;
+  int width = nx;   // gridDim.x * TILE_DIM;
+  int height = ny;  // gridDim.y * TILE_DIM;
 
   for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
     if ((x < nx) && ((y + j) < ny)) {
@@ -135,7 +129,8 @@ __global__ void transposeNoBankConflictsRectangle(float* odata,
 int main(int argc, char** argv) {
   const int mem_size = nx * ny * sizeof(float);
 
-  dim3 dimGrid(nx / TILE_DIM, ny / TILE_DIM, 1);
+  dim3 dimGrid((int)ceil((float)nx / (float)TILE_DIM),
+               (int)ceil((float)ny / (float)TILE_DIM), 1);
   dim3 dimBlock(TILE_DIM, TILE_DIM, 1);
 
   int devId = 0;
@@ -146,10 +141,22 @@ int main(int argc, char** argv) {
   checkCuda(cudaGetDeviceProperties(&prop, devId));
   printf("\nDevice : %s\n", prop.name);
   printf("%d.%d\n", prop.major, prop.minor);
+  printf("maxGridSize= %d, %d\n", prop.maxGridSize[0], prop.maxGridSize[1]);
   printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n", nx, ny,
          TILE_DIM, BLOCK_ROWS, TILE_DIM, TILE_DIM);
   printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n", dimGrid.x, dimGrid.y,
          dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
+
+  printf("warp size: %d\n", prop.warpSize);
+  printf("max threads per block: %d\n", prop.maxThreadsPerBlock);
+  printf("max thread dim z:%d y:%d x:%d\n", prop.maxThreadsDim[0],
+         prop.maxThreadsDim[1], prop.maxThreadsDim[2]);
+  printf("max grid size z:%d y:%d x:%d\n", prop.maxGridSize[0],
+         prop.maxGridSize[1], prop.maxGridSize[2]);
+  printf("clock rate(KHz):\n", prop.clockRate);
+  if (dimBlock.x * dimBlock.y * dimBlock.z > prop.maxThreadsPerBlock) {
+    printf("Error! Block size is greater than maxThreadsPerBlock!\n");
+  }
 
   checkCuda(cudaSetDevice(devId));
 
@@ -163,7 +170,8 @@ int main(int argc, char** argv) {
   checkCuda(cudaMalloc(&d_cdata, mem_size));
   checkCuda(cudaMalloc(&d_tdata, mem_size));
 
-  // check parameters and calculate execution configuration
+// check parameters and calculate execution configuration
+#if 0
   if (nx % TILE_DIM || ny % TILE_DIM) {
     printf("nx and ny must be a multiple of TILE_DIM\n");
     goto error_exit;
@@ -173,6 +181,7 @@ int main(int argc, char** argv) {
     printf("TILE_DIM must be a multiple of BLOCK_ROWS\n");
     goto error_exit;
   }
+#endif
 
   // host
   for (int j = 0; j < ny; j++) {
@@ -180,23 +189,10 @@ int main(int argc, char** argv) {
       h_idata[j * nx + i] = j * nx + i;
     }
   }
-  /* Print for tfjs sensor
-    // correct result for error checking
-    printf("\n[");
-    for (int i = 0; i < ny; i++) {
-      printf("\n");
-      for (int j = 0; j < nx; j++) {
-        printf("%d,",(int)h_idata[i*nx+j]);
-      }
-    }
-    printf("\n],[64,64]);");
-  */
-  /*
-     for (int j = 0; j < nx; j++) {
-      printf("%d ",(int)h_idata[j]);
-    }
-  */
-
+  printf("\n");
+  for (int j = 0; j < 100; j++) {
+    printf("%d ", (int)h_idata[j]);
+  }
   // correct result for error checking
   for (int j = 0; j < ny; j++) {
     for (int i = 0; i < nx; i++) {
@@ -204,24 +200,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  /* Print for tfjs sensor
-    // correct result for error checking
-    printf("\n[");
-    for (int i = 0; i < nx; i++) {
-      printf("\n");
-      for (int j = 0; j < ny; j++) {
-        printf("%d,",(int)gold[i*ny+j]);
-      }
-    }
-    printf("\n],[64,64]);");
-  */
-
-  /*
-    for (int j = 0; j < ny; j++) {
-      printf("%d ",(int)gold[j]);
-    }
-  */
-
+  printf("\n");
+  for (int j = 0; j < 100; j++) {
+    printf("%d ", (int)gold[j]);
+  }
   printf("\nmem_size=%d\n\n", mem_size);
   // device
   checkCuda(cudaMemcpy(d_idata, h_idata, mem_size, cudaMemcpyHostToDevice));
@@ -237,18 +219,16 @@ int main(int argc, char** argv) {
   // ------------
 
   printf("%35s%20s\n", "Routine", "Bandwidth (GB/s)");
+#if 1
   {
-    /*
-    printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n",
-           nx, ny, TILE_DIM, TILE_DIM, TILE_DIM, TILE_DIM);
-    printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n",
-           dimGrid.x, dimGrid.y, dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
-    */
-
+    printf("%35s", "transposeNaiveRectangle ");
+    printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n", nx, ny,
+           TILE_DIM, TILE_DIM, TILE_DIM, TILE_DIM);
+    printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n", dimGrid.x, dimGrid.y,
+           dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
     // --------------
     // transposeNaiveRectangle
     // --------------
-    printf("%35s", "transposeNaiveRectangle");
     checkCuda(cudaMemset(d_tdata, 0, mem_size));
     // warmup
     transposeNaiveRectangle<<<dimGrid, dimBlock>>>(d_tdata, d_idata);
@@ -259,24 +239,25 @@ int main(int argc, char** argv) {
     checkCuda(cudaEventSynchronize(stopEvent));
     checkCuda(cudaEventElapsedTime(&ms, startEvent, stopEvent));
     checkCuda(cudaMemcpy(h_tdata, d_tdata, mem_size, cudaMemcpyDeviceToHost));
-    printf(" ms=%f\n", ms / NUM_REPS);
     postprocess(gold, h_tdata, nx * ny, ms);
   }
-
+#endif
+#if 1
   {
-    dim3 dimGrid(nx / TILE_DIM, ny / TILE_DIM, 1);
-    // dim3 dimBlock(TILE_DIM, TILE_DIM, 1);
+    printf("%35s", "transposeCoalescedRectangle");
+    // dim3 dimGrid(ceil(nx / TILE_DIM), ceil(ny / TILE_DIM), 1);
+    dim3 dimGrid((int)ceil((float)nx / (float)TILE_DIM),
+                 (int)ceil((float)ny / (float)TILE_DIM), 1);
     dim3 dimBlock(TILE_DIM, BLOCK_ROWS, 1);
-    /*
-    printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n",
-           nx, ny, TILE_DIM, BLOCK_ROWS, TILE_DIM, TILE_DIM);
-    printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n",
-           dimGrid.x, dimGrid.y, dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
-    */
+
+    printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n", nx, ny,
+           TILE_DIM, BLOCK_ROWS, TILE_DIM, TILE_DIM);
+    printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n", dimGrid.x, dimGrid.y,
+           dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
+
     // ------------------
     // transposeCoalescedRectangle
     // ------------------
-    printf("%35s", "transposeCoalescedRectangle");
     checkCuda(cudaMemset(d_tdata, 0, mem_size));
     // warmup
     transposeCoalescedRectangle<<<dimGrid, dimBlock>>>(d_tdata, d_idata);
@@ -287,24 +268,25 @@ int main(int argc, char** argv) {
     checkCuda(cudaEventSynchronize(stopEvent));
     checkCuda(cudaEventElapsedTime(&ms, startEvent, stopEvent));
     checkCuda(cudaMemcpy(h_tdata, d_tdata, mem_size, cudaMemcpyDeviceToHost));
-    printf(" ms=%f\n", ms / NUM_REPS);
     postprocess(gold, h_tdata, nx * ny, ms);
   }
-
+#endif
+#if 1
   {
-    dim3 dimGrid(nx / TILE_DIM, ny / TILE_DIM, 1);
-    // dim3 dimBlock(TILE_DIM, TILE_DIM, 1);
+    printf("%35s", "transposeNobankConflictsRectangle");
+    dim3 dimGrid((int)ceil((float)nx / (float)TILE_DIM),
+                 (int)ceil((float)ny / (float)TILE_DIM), 1);
     dim3 dimBlock(TILE_DIM, BLOCK_ROWS, 1);
-    /*
-    printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n",
-           nx, ny, TILE_DIM, BLOCK_ROWS, TILE_DIM, TILE_DIM);
-    printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n",
-           dimGrid.x, dimGrid.y, dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
-    */
+
+    printf("Matrix size: %d %d, Block size: %d %d, Tile size: %d %d\n", nx, ny,
+           TILE_DIM, BLOCK_ROWS, TILE_DIM, TILE_DIM);
+    printf("dimGrid: %d %d %d. dimBlock: %d %d %d\n", dimGrid.x, dimGrid.y,
+           dimGrid.z, dimBlock.x, dimBlock.y, dimBlock.z);
+
     // ------------------
     // transposeNoBankConflictsRectangle
     // ------------------
-    printf("%35s", "transposeNobankConflictsRectangle");
+
     checkCuda(cudaMemset(d_tdata, 0, mem_size));
     // warmup
     transposeNoBankConflictsRectangle<<<dimGrid, dimBlock>>>(d_tdata, d_idata);
@@ -316,10 +298,9 @@ int main(int argc, char** argv) {
     checkCuda(cudaEventSynchronize(stopEvent));
     checkCuda(cudaEventElapsedTime(&ms, startEvent, stopEvent));
     checkCuda(cudaMemcpy(h_tdata, d_tdata, mem_size, cudaMemcpyDeviceToHost));
-    printf(" ms=%f\n", ms / NUM_REPS);
     postprocess(gold, h_tdata, nx * ny, ms);
   }
-
+#endif
 error_exit:
   // cleanup
   checkCuda(cudaEventDestroy(startEvent));
